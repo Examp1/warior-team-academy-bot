@@ -4,13 +4,21 @@ import sqlite3
 bot = telebot.TeleBot('8531903826:AAFSlQOtBz6vv2phMza6Q-NTqVYt1xr-iu4')
 
 # --------------------------------------------------------------------------
-# INIT DB
+# DB FUNCTIONS
 # --------------------------------------------------------------------------
 
-
-def init_db():
+def db_connect():
     conn = sqlite3.connect("clients.sql")
     cur = conn.cursor()
+    return conn, cur
+
+def db_close_connect(conn, save=False):
+    if save:
+        conn.commit()
+    conn.close()
+
+def init_db():
+    conn, cur = db_connect()
     cur.execute('''
         CREATE TABLE IF NOT EXISTS clients (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -25,20 +33,21 @@ def init_db():
             last_active TEXT
         )
     ''')
-    conn.commit()
-    conn.close()
+    db_close_connect(conn, save=True)
 
 init_db()
+
+
 
 # --------------------------------------------------------------------------
 # HELPERS
 # --------------------------------------------------------------------------
 
 # отправка длинных сообщений
-def send_long(chat_id, text):
+def send_long(chat_id, text, markup=None):
     last_msg = None
     for i in range(0, len(text), 4000):
-        last_msg = bot.send_message(chat_id, text[i:i+4000], parse_mode="Markdown")
+        last_msg = bot.send_message(chat_id, text[i:i+4000], parse_mode="Markdown", reply_markup=markup)
     return last_msg
 
 # хранение состояния регистрации
@@ -53,6 +62,7 @@ def make_admin_markup():
     markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add("Просмотреть всех пользователей")
     markup.add("Регистрация пользователя")
+    markup.add("Поиск пользователя по базе")
     return markup
 
 @bot.message_handler(commands=['admin'])
@@ -76,9 +86,72 @@ def choose_admin_function(message):
         show_all_users(message)
     elif message.text == "Регистрация пользователя":
         start_register(message)
+    elif message.text == "Поиск пользователя по базе":
+        start_search(message)
     else:
-        msg = bot.send_message(message.chat.id, "Неизвестная команда. Выберите кнопку.")
+        markup = make_admin_markup()
+        msg = bot.send_message(message.chat.id, "Неизвестная команда. Выберите кнопку.", reply_markup=markup)
         bot.register_next_step_handler(msg, choose_admin_function)
+
+
+# --------------------------------------------------------------------------
+# SERACH USERS
+# --------------------------------------------------------------------------
+
+def start_search(message):
+    remove_markup = telebot.types.ReplyKeyboardRemove()
+    msg = bot.send_message(message.chat.id, "Введите имя или телефон пользователя для поиска:", reply_markup=remove_markup)
+    bot.register_next_step_handler(msg, perform_search)
+
+def perform_search(message):
+    query = message.text.strip()
+    conn, cur = db_connect()
+    cur.execute("SELECT * FROM clients WHERE name LIKE ? OR phone LIKE ? OR parent_name LIKE ? OR parent_phone LIKE ?", 
+                (f"%{query}%", f"%{query}%", f"%{query}%", f"%{query}%"))
+    find_users = cur.fetchall()
+    db_close_connect(conn)
+
+    if not find_users:
+        markup = make_admin_markup()
+        msg = bot.send_message(message.chat.id, "Пользователи не найдены.", reply_markup=markup)
+        bot.register_next_step_handler(msg, choose_admin_function)
+        return
+
+    for r in find_users:
+        text = (
+            f"🆔 ID: {r[0]}\n"
+            f"👤 Имя: {r[3]}\n"
+            f"📱 Телефон: {r[4]}\n"
+            f"👨‍👩‍👧 Родитель: {r[5]}\n"
+            f"📞 Тел. родителя: {r[6]}\n"
+        )
+        
+        # Создаём инлайн-кнопки для каждого пользователя
+        inline_markup = telebot.types.InlineKeyboardMarkup()
+        inline_markup.add(
+            telebot.types.InlineKeyboardButton("✏️ Редактировать", callback_data=f"edit_{r[0]}"),
+            telebot.types.InlineKeyboardButton("🗑 Удалить", callback_data=f"delete_{r[0]}")
+        )
+        bot.send_message(message.chat.id, text, reply_markup=inline_markup)
+
+    # После всех результатов возвращаем админ-меню
+    markup = make_admin_markup()
+    msg = bot.send_message(message.chat.id, "Выберите действие:", reply_markup=markup)
+    bot.register_next_step_handler(msg, choose_admin_function)
+
+
+# --------------------------------------------------------------------------
+# USERS ACTIONS 
+# --------------------------------------------------------------------------
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("delete_"))
+def handle_delete(call):
+    user_id = call.data.split("_")[1]
+    conn, curr = db_connect()
+    curr.execute("DELETE FROM clients WHERE id = ?", (user_id,))
+    db_close_connect(conn, save=True)
+    bot.delete_message(call.message.chat.id, call.message.message_id)
+    msg = bot.answer_callback_query(call.id, "Удалено!")
 
 
 # --------------------------------------------------------------------------
@@ -86,11 +159,10 @@ def choose_admin_function(message):
 # --------------------------------------------------------------------------
 
 def show_all_users(message):
-    conn = sqlite3.connect("clients.sql")
-    cur = conn.cursor()
+    conn, cur = db_connect()
     cur.execute("SELECT * FROM clients")
     rows = cur.fetchall()
-    conn.close()
+    db_close_connect(conn)
 
     if not rows:
         msg = bot.send_message(message.chat.id, "Пользователей пока нет.")
@@ -149,14 +221,12 @@ def reg_parent_phone(message):
 
     data = user_states[chat_id]
 
-    conn = sqlite3.connect("clients.sql")
-    cur = conn.cursor()
+    conn, cur = db_connect()
     cur.execute(
         "INSERT INTO clients (name, phone, parent_name, parent_phone) VALUES (?, ?, ?, ?)",
         (data["name"], data["phone"], data["parent_name"], data["parent_phone"])
     )
-    conn.commit()
-    conn.close()
+    db_close_connect(conn, save=True)
 
     bot.send_message(chat_id, f'✅ Регистрация {user_states[chat_id]["name"]} - {user_states[chat_id]["phone"]} завершена!')
 
