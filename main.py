@@ -1,40 +1,44 @@
+import os
 import telebot
 import sqlite3
+import threading
+import time
+from dotenv import load_dotenv
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 from telegram_bot_calendar import DetailedTelegramCalendar, LSTEP
 
-bot = telebot.TeleBot('8531903826:AAFSlQOtBz6vv2phMza6Q-NTqVYt1xr-iu4')
+load_dotenv()
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS").split(",")]
 
-import threading
-import time
+bot = telebot.TeleBot(BOT_TOKEN)
 
-ADMIN_IDS = [342465611, 289956357, 6014645981, 1038443281]  # список ID администраторов
 
 # --------------------------------------------------------------------------
 # CHECK SUBSCRIBTIONS
 # --------------------------------------------------------------------------
 
 def check_subscriptions():
-    while True:
-        conn, cur = db_connect()
-        cur.execute("SELECT id, name, finish_date FROM clients")
-        rows = cur.fetchall()
-        db_close_connect(conn)
+    while True: #делаем бесконечный цикл
+        conn, cur = db_connect() #конект к бд
+        cur.execute("SELECT id, name, finish_date FROM clients") #достаем всех клиентов
+        rows = cur.fetchall() #получаем клиентов в перменную row
+        db_close_connect(conn) # закрываем конект к бд
         
-        today = datetime.now().date()
+        today = datetime.now().date() # получаем текущую дату
         
-        for row in rows:
-            user_id, name, finish_date_str = row
+        for row in rows: # перебираем клиентов
+            user_id, name, finish_date_str = row # деструкторизируем
             
-            if not finish_date_str:
-                continue
+            if not finish_date_str:  # если finish_date пустое/None/""
+                continue             # пропускаем этого клиента, переходим к следующему
                 
-            try:
-                finish_date = datetime.strptime(finish_date_str, "%d.%m.%Y").date()
-                days_left = (finish_date - today).days
+            try: # делаем трай , чтобы если что-то не так выбрасывать ошибку 
+                finish_date = datetime.strptime(finish_date_str, "%d.%m.%Y").date() # получаем финиш дату 
+                days_left = (finish_date - today).days # высчитываем сколько дней осталось
                 
-                if days_left == 1:
+                if days_left == 1: # если 1 , то кидаем сообщение админам
                     for admin_id in ADMIN_IDS:
                         bot.send_message(
                             admin_id,
@@ -50,7 +54,7 @@ def check_subscriptions():
             except ValueError:
                 continue
         
-        time.sleep(86400)
+        time.sleep(86400) # вот тут не понимаю как это работает в связке с while true
 
 
 # --------------------------------------------------------------------------
