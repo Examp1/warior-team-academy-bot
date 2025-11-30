@@ -1,7 +1,57 @@
 import telebot
 import sqlite3
+from datetime import datetime
+from dateutil.relativedelta import relativedelta
+from telegram_bot_calendar import DetailedTelegramCalendar, LSTEP
 
 bot = telebot.TeleBot('8531903826:AAFSlQOtBz6vv2phMza6Q-NTqVYt1xr-iu4')
+
+import threading
+import time
+
+ADMIN_IDS = [342465611, 289956357, 6014645981, 1038443281]  # список ID администраторов
+
+# --------------------------------------------------------------------------
+# CHECK SUBSCRIBTIONS
+# --------------------------------------------------------------------------
+
+def check_subscriptions():
+    while True:
+        conn, cur = db_connect()
+        cur.execute("SELECT id, name, finish_date FROM clients")
+        rows = cur.fetchall()
+        db_close_connect(conn)
+        
+        today = datetime.now().date()
+        
+        for row in rows:
+            user_id, name, finish_date_str = row
+            
+            if not finish_date_str:
+                continue
+                
+            try:
+                finish_date = datetime.strptime(finish_date_str, "%d.%m.%Y").date()
+                days_left = (finish_date - today).days
+                
+                if days_left == 1:
+                    for admin_id in ADMIN_IDS:
+                        bot.send_message(
+                            admin_id,
+                            f"⚠️ Абонемент для {name} истекает завтра ({finish_date_str})"
+                        )
+                elif days_left == 0:
+                    for admin_id in ADMIN_IDS:
+                        bot.send_message(
+                            admin_id,
+                            f"🔴 Абонемент для {name} истекает сегодня!"
+                        )
+                        
+            except ValueError:
+                continue
+        
+        time.sleep(86400)
+
 
 # --------------------------------------------------------------------------
 # DB FUNCTIONS
@@ -22,15 +72,15 @@ def init_db():
     cur.execute('''
         CREATE TABLE IF NOT EXISTS clients (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            telegram_id INTEGER,
-            username TEXT,
             name TEXT,
             phone TEXT,
             parent_name TEXT,
             parent_phone TEXT,
-            role TEXT DEFAULT 'user',
-            created_at TEXT,
-            last_active TEXT
+            start_date TEXT,
+            finish_date TEXT,
+            is_expiried BOOLEAN DEFAULT FALSE,
+            telegram_id INTEGER,
+            role TEXT DEFAULT 'user'
         )
     ''')
     db_close_connect(conn, save=True)
@@ -72,7 +122,6 @@ def cancel_action():
 
 @bot.message_handler(commands=['admin'])
 def admin(message):
-    ADMIN_IDS = [342465611, 289956357, 6014645981, 1038443281]  # список ID администраторов
     if message.chat.id not in ADMIN_IDS:
         bot.send_message(message.chat.id, "❌ У вас нет доступа к админ панели.")
         return
@@ -124,11 +173,13 @@ def perform_search(message):
 
     for r in find_users:
         text = (
-            f"🆔 ID: {r[0]}\n"
-            f"👤 Имя: {r[3]}\n"
-            f"📱 Телефон: {r[4]}\n"
-            f"👨‍👩‍👧 Родитель: {r[5]}\n"
-            f"📞 Тел. родителя: {r[6]}\n"
+            
+            f"👤 Имя: {r[1]}\n"
+            f"📱 Телефон: {r[2]}\n"
+            f"👨‍👩‍👧 Родитель: {r[3]}\n"
+            f"📞 Тел. родителя: {r[4]}\n"
+            f"📅 Дата оплаты абонемента: {r[5]}\n"
+            f"📅 Дата окончанния абонемента: {r[6]}\n"
         )
         
         # Создаём инлайн-кнопки для каждого пользователя
@@ -229,11 +280,12 @@ def show_all_users(message):
     text = "📋 *Список пользователей:*\n\n"
     for r in rows:
         text += (
-            f"🆔 ID: {r[0]}\n"
-            f"👤 Имя: {r[3]}\n"
-            f"📱 Телефон: {r[4]}\n"
-            f"👨‍👩‍👧 Родитель: {r[5]}\n"
-            f"📞 Тел. родителя: {r[6]}\n\n"
+            f"👤 Имя: {r[1]}\n"
+            f"📱 Телефон: {r[2]}\n"
+            f"👨‍👩‍👧 Родитель: {r[3]}\n"
+            f"📞 Тел. родителя: {r[4]}\n"
+            f"📅 Дата оплаты абонемента: {r[5]}\n"
+            f"📅 Дата окончанния абонемента: {r[6]}\n\n"
         )
 
     msg = send_long(message.chat.id, text)
@@ -275,23 +327,40 @@ def reg_parent_name(message):
 def reg_parent_phone(message):
     chat_id = message.chat.id
     user_states[chat_id]["parent_phone"] = message.text.strip()
+    calendar, step = DetailedTelegramCalendar().build()
+    bot.send_message(chat_id, "Выберите дату начала абонемента:", reply_markup=calendar)
 
-    data = user_states[chat_id]
-
-    conn, cur = db_connect()
-    cur.execute(
-        "INSERT INTO clients (name, phone, parent_name, parent_phone) VALUES (?, ?, ?, ?)",
-        (data["name"], data["phone"], data["parent_name"], data["parent_phone"])
-    )
-    db_close_connect(conn, save=True)
-
-    bot.send_message(chat_id, f'✅ Регистрация {user_states[chat_id]["name"]} - {user_states[chat_id]["phone"]} завершена!')
-
-    del user_states[chat_id]  # очищаем временное состояние пользователя
-    markup = make_admin_markup()
-    msg = bot.send_message(chat_id, "Возвращаемся в админ панель:", reply_markup=markup)
-    bot.register_next_step_handler(msg, choose_admin_function)
+# ловилю функцию колбек с функции DetailedTelegramCalendar и делаю тут финал регистрации
+@bot.callback_query_handler(func=DetailedTelegramCalendar.func())
+def handle_calendar(call):
+    chat_id = call.message.chat.id
+    result, key, step = DetailedTelegramCalendar().process(call.data)
     
+    if not result and key:
+        bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=key)
+    elif result:
+        start_date = result
+        finish_date = start_date + relativedelta(months=1)
+        
+        data = user_states[chat_id]
+        
+        conn, cur = db_connect()
+        cur.execute(
+            "INSERT INTO clients (name, phone, parent_name, parent_phone, start_date, finish_date) VALUES (?, ?, ?, ?, ?, ?)",
+            (data["name"], data["phone"], data["parent_name"], data["parent_phone"],
+             start_date.strftime("%d.%m.%Y"), finish_date.strftime("%d.%m.%Y"))
+        )
+        db_close_connect(conn, save=True)
+        
+        bot.edit_message_text(
+            f'✅ Регистрация завершена!\n📅 Абонемент: {start_date.strftime("%d.%m.%Y")} - {finish_date.strftime("%d.%m.%Y")}',
+            chat_id, call.message.message_id
+        )
+        
+        del user_states[chat_id]
+        markup = make_admin_markup()
+        msg = bot.send_message(chat_id, "Возвращаемся в админ панель:", reply_markup=markup)
+        bot.register_next_step_handler(msg, choose_admin_function)
 
 # --------------------------------------------------------------------------
 # USER PANEL
@@ -304,5 +373,8 @@ def start(message):
 # --------------------------------------------------------------------------
 # START POLLING
 # --------------------------------------------------------------------------
+
+subscription_thread = threading.Thread(target=check_subscriptions, daemon=True)
+subscription_thread.start()
 
 bot.infinity_polling()
