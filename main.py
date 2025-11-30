@@ -65,6 +65,11 @@ def make_admin_markup():
     markup.add("Поиск пользователя по базе")
     return markup
 
+def cancel_action():
+    markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add("Отмените действие")
+    return markup
+
 @bot.message_handler(commands=['admin'])
 def admin(message):
     ADMIN_IDS = [342465611, 289956357, 6014645981, 1038443281]  # список ID администраторов
@@ -162,33 +167,42 @@ def handle_edit(call):
 @bot.callback_query_handler(func=lambda call: call.data.startswith("chname_"))
 def handle_edit_name(call):
     user_id = call.data.split("_")[1]
-    msg = bot.send_message(call.message.chat.id, "Введите новое имя:")
+    cancale_btn = cancel_action()
+    msg = bot.send_message(call.message.chat.id, "Введите новое имя:", reply_markup=cancale_btn)
     bot.register_next_step_handler(msg, save_new_value, user_id, "name")
     bot.answer_callback_query(call.id)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("chphone_"))
 def handle_edit_phone(call):
     user_id = call.data.split("_")[1]
-    msg = bot.send_message(call.message.chat.id, "Введите новый телефон:")
+    cancale_btn = cancel_action()
+    msg = bot.send_message(call.message.chat.id, "Введите новый телефон:", reply_markup=cancale_btn)
     bot.register_next_step_handler(msg, save_new_value, user_id, "phone")
     bot.answer_callback_query(call.id)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("chparentphone_"))
 def handle_edit_parent_phone(call):
     user_id = call.data.split("_")[1]
-    msg = bot.send_message(call.message.chat.id, "Введите телефон родителя:")
+    cancale_btn = cancel_action()
+    msg = bot.send_message(call.message.chat.id, "Введите телефон родителя:", reply_markup=cancale_btn)
     bot.register_next_step_handler(msg, save_new_value, user_id, "parent_phone")
     bot.answer_callback_query(call.id)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("chparent_"))
 def handle_edit_parent(call):
     user_id = call.data.split("_")[1]
-    msg = bot.send_message(call.message.chat.id, "Введите имя родителя:")
+    cancale_btn = cancel_action()
+    msg = bot.send_message(call.message.chat.id, "Введите имя родителя:", reply_markup=cancale_btn)
     bot.register_next_step_handler(msg, save_new_value, user_id, "parent_name")
     bot.answer_callback_query(call.id)
 
 # Универсальная функция сохранения
 def save_new_value(message, user_id, field):
+    if message.text == "Отмените действие":
+        markup = make_admin_markup()
+        msg = bot.send_message(message.chat.id, "Действие отменено.", reply_markup=markup)
+        bot.register_next_step_handler(msg, choose_admin_function)
+        return
     new_value = message.text.strip()
     conn, cur = db_connect()
     cur.execute(f"UPDATE clients SET {field} = ? WHERE id = ?", (new_value, user_id))
