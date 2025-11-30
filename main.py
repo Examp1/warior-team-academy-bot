@@ -14,6 +14,40 @@ ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS").split(",")]
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
+# --------------------------------------------------------------------------
+# DB FUNCTIONS
+# --------------------------------------------------------------------------
+
+def db_connect():
+    conn = sqlite3.connect("clients.sql")
+    cur = conn.cursor()
+    return conn, cur
+
+def db_close_connect(conn, save=False):
+    if save:
+        conn.commit()
+    conn.close()
+
+def init_db():
+    conn, cur = db_connect()
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS clients (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT,
+            phone TEXT,
+            parent_name TEXT,
+            parent_phone TEXT,
+            start_date TEXT,
+            finish_date TEXT,
+            is_expiried BOOLEAN DEFAULT FALSE,
+            telegram_id INTEGER,
+            telegram_username TEXT,
+            role TEXT DEFAULT 'user'
+        )
+    ''')
+    db_close_connect(conn, save=True)
+
+init_db()
 
 # --------------------------------------------------------------------------
 # CHECK SUBSCRIBTIONS
@@ -55,42 +89,6 @@ def check_subscriptions():
                 continue
         
         time.sleep(86400) # вот тут не понимаю как это работает в связке с while true
-
-
-# --------------------------------------------------------------------------
-# DB FUNCTIONS
-# --------------------------------------------------------------------------
-
-def db_connect():
-    conn = sqlite3.connect("clients.sql")
-    cur = conn.cursor()
-    return conn, cur
-
-def db_close_connect(conn, save=False):
-    if save:
-        conn.commit()
-    conn.close()
-
-def init_db():
-    conn, cur = db_connect()
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS clients (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT,
-            phone TEXT,
-            parent_name TEXT,
-            parent_phone TEXT,
-            start_date TEXT,
-            finish_date TEXT,
-            is_expiried BOOLEAN DEFAULT FALSE,
-            telegram_id INTEGER,
-            role TEXT DEFAULT 'user'
-        )
-    ''')
-    db_close_connect(conn, save=True)
-
-init_db()
-
 
 
 # --------------------------------------------------------------------------
@@ -177,7 +175,7 @@ def perform_search(message):
 
     for r in find_users:
         text = (
-            
+            f"🆔 Tg: @{r[9]} | id: {r[8]}\n"
             f"👤 Имя: {r[1]}\n"
             f"📱 Телефон: {r[2]}\n"
             f"👨‍👩‍👧 Родитель: {r[3]}\n"
@@ -284,6 +282,7 @@ def show_all_users(message):
     text = "📋 *Список пользователей:*\n\n"
     for r in rows:
         text += (
+            f"🆔 Tg: @{r[9]} | id: {r[8]}\n"
             f"👤 Имя: {r[1]}\n"
             f"📱 Телефон: {r[2]}\n"
             f"👨‍👩‍👧 Родитель: {r[3]}\n"
@@ -310,6 +309,8 @@ def start_register(message):
 def reg_name(message):
     chat_id = message.chat.id
     user_states[chat_id]["name"] = message.text.strip()
+    user_states[chat_id]["telegram_id"] = message.chat.id
+    user_states[chat_id]["telegram_username"] = message.chat.username
     msg = bot.send_message(chat_id, "Введите номер телефона:")
     bot.register_next_step_handler(msg, reg_phone)
 
@@ -350,9 +351,9 @@ def handle_calendar(call):
         
         conn, cur = db_connect()
         cur.execute(
-            "INSERT INTO clients (name, phone, parent_name, parent_phone, start_date, finish_date) VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO clients (name, phone, parent_name, parent_phone, start_date, finish_date, telegram_id, telegram_username) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (data["name"], data["phone"], data["parent_name"], data["parent_phone"],
-             start_date.strftime("%d.%m.%Y"), finish_date.strftime("%d.%m.%Y"))
+             start_date.strftime("%d.%m.%Y"), finish_date.strftime("%d.%m.%Y"), data["telegram_id"], data["telegram_username"])
         )
         db_close_connect(conn, save=True)
         
@@ -378,7 +379,7 @@ def start(message):
 # START POLLING
 # --------------------------------------------------------------------------
 
-subscription_thread = threading.Thread(target=check_subscriptions, daemon=True)
-subscription_thread.start()
+# subscription_thread = threading.Thread(target=check_subscriptions, daemon=True)
+# subscription_thread.start()
 
 bot.infinity_polling()
