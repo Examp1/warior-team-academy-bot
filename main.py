@@ -40,7 +40,7 @@ def init_db():
             start_date TEXT,
             finish_date TEXT,
             is_expiried BOOLEAN DEFAULT FALSE,
-            how_much_was_price INTEGER,
+            how_much_was_price TEXT,
             telegram_id INTEGER,
             telegram_username TEXT,
             role TEXT DEFAULT 'user'
@@ -55,17 +55,16 @@ init_db()
 # --------------------------------------------------------------------------
 
 def check_subscriptions():
-    time.sleep(10)
     while True: #делаем бесконечный цикл
         conn, cur = db_connect() #конект к бд
-        cur.execute("SELECT id, name, finish_date FROM clients") #достаем всех клиентов
+        cur.execute("SELECT id, name, telegram_username, finish_date FROM clients") #достаем всех клиентов
         rows = cur.fetchall() #получаем клиентов в перменную row
         db_close_connect(conn) # закрываем конект к бд
         
         today = datetime.now().date() # получаем текущую дату
         
         for row in rows:
-            user_id, name, finish_date_str = row # деструкторизируем
+            user_id, name, telegram_username, finish_date_str = row # деструкторизируем
             
             if not finish_date_str:  # если finish_date пустое/None/""
                 continue             # пропускаем этого клиента, переходим к следующему
@@ -78,22 +77,22 @@ def check_subscriptions():
                     for admin_id in ADMIN_IDS:
                         bot.send_message(
                             admin_id,
-                            f"⚠️ Абонемент для {name} истекает завтра ({finish_date_str})"
+                            f"⚠️ Абонемент {name} @{telegram_username} истекает завтра ({finish_date_str})"
                         )
-                elif days_left == 0:
+                elif days_left <= 0:
                     conn, cur = db_connect() 
                     cur.execute("UPDATE clients SET is_expiried = TRUE WHERE id = ?", (user_id,))
                     db_close_connect(conn, save=True)
                     for admin_id in ADMIN_IDS:
                         bot.send_message(
                             admin_id,
-                            f"❌ Абонемент для {name} истек сегодня!"
+                            f"❌ Абонемент {name} @{telegram_username} истек сегодня!"
                         )
                         
             except ValueError:
                 continue
         
-        time.sleep(600)
+        time.sleep(86400)
 
 
 # --------------------------------------------------------------------------
