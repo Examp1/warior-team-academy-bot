@@ -40,6 +40,7 @@ def init_db():
             start_date TEXT,
             finish_date TEXT,
             is_expiried BOOLEAN DEFAULT FALSE,
+            how_much_was_price INTEGER,
             telegram_id INTEGER,
             telegram_username TEXT,
             role TEXT DEFAULT 'user'
@@ -54,6 +55,7 @@ init_db()
 # --------------------------------------------------------------------------
 
 def check_subscriptions():
+    time.sleep(10)
     while True: #делаем бесконечный цикл
         conn, cur = db_connect() #конект к бд
         cur.execute("SELECT id, name, finish_date FROM clients") #достаем всех клиентов
@@ -62,7 +64,7 @@ def check_subscriptions():
         
         today = datetime.now().date() # получаем текущую дату
         
-        for row in rows: # перебираем клиентов
+        for row in rows:
             user_id, name, finish_date_str = row # деструкторизируем
             
             if not finish_date_str:  # если finish_date пустое/None/""
@@ -79,16 +81,19 @@ def check_subscriptions():
                             f"⚠️ Абонемент для {name} истекает завтра ({finish_date_str})"
                         )
                 elif days_left == 0:
+                    conn, cur = db_connect() 
+                    cur.execute("UPDATE clients SET is_expiried = TRUE WHERE id = ?", (user_id,))
+                    db_close_connect(conn, save=True)
                     for admin_id in ADMIN_IDS:
                         bot.send_message(
                             admin_id,
-                            f"🔴 Абонемент для {name} истекает сегодня!"
+                            f"❌ Абонемент для {name} истек сегодня!"
                         )
                         
             except ValueError:
                 continue
         
-        time.sleep(86400) # вот тут не понимаю как это работает в связке с while true
+        time.sleep(600)
 
 
 # --------------------------------------------------------------------------
@@ -182,6 +187,7 @@ def perform_search(message):
             f"📞 Тел. родителя: {r[4]}\n"
             f"📅 Дата оплаты абонемента: {r[5]}\n"
             f"📅 Дата окончанния абонемента: {r[6]}\n"
+            f"📅 Абонемент закончился ?: {r[7]}\n"
         )
         
         # Создаём инлайн-кнопки для каждого пользователя
@@ -213,6 +219,7 @@ def handle_edit(call):
     inline_markup.add(telebot.types.InlineKeyboardButton("Изменить телефон", callback_data=f"chphone_{user_id}"))
     inline_markup.add(telebot.types.InlineKeyboardButton("Изменить родителя", callback_data=f"chparent_{user_id}"))
     inline_markup.add(telebot.types.InlineKeyboardButton("Изменить телефон родителя", callback_data=f"chparentphone_{user_id}"))
+    inline_markup.add(telebot.types.InlineKeyboardButton("Продлить абонемент", callback_data=f"renew_subscription_{user_id}"))
     
     bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=inline_markup)
     bot.answer_callback_query(call.id)
@@ -249,6 +256,28 @@ def handle_edit_parent(call):
     bot.register_next_step_handler(msg, save_new_value, user_id, "parent_name")
     bot.answer_callback_query(call.id)
 
+@bot.callback_query_handler(func=lambda call: call.data.startswith("renew_subscription_"))
+def handle_edit_parent(call):
+    user_id = call.data.split("_")[2]
+    chat_id = call.message.chat.id
+    # cancale_btn = cancel_action()
+    conn, cur = db_connect()
+    cur.execute("SELECT * FROM clients WHERE id = ?", (user_id,))
+    find_user = cur.fetchone()
+    db_close_connect(conn, save=True)
+    if not find_user:
+        bot.answer_callback_query(call.id, "Пользователь не найден")
+        return
+    
+    user_states[chat_id] = {
+        "action": "renew",
+        "client_id": user_id,
+        "client_name": find_user[1]
+        }
+    calendar, step = DetailedTelegramCalendar().build()
+    bot.send_message(chat_id, f"Продление для {find_user[1]}. Выберите новую дату начала:", reply_markup=calendar)
+    bot.answer_callback_query(call.id)
+    
 # Универсальная функция сохранения
 def save_new_value(message, user_id, field):
     if message.text == "Отмените действие":
@@ -288,7 +317,8 @@ def show_all_users(message):
             f"👨‍👩‍👧 Родитель: {r[3]}\n"
             f"📞 Тел. родителя: {r[4]}\n"
             f"📅 Дата оплаты абонемента: {r[5]}\n"
-            f"📅 Дата окончанния абонемента: {r[6]}\n\n"
+            f"📅 Дата окончанния абонемента: {r[6]}\n"
+            f"📅 Абонемент закончился ?: {r[7]}\n\n"
         )
 
     msg = send_long(message.chat.id, text)
@@ -332,10 +362,28 @@ def reg_parent_name(message):
 def reg_parent_phone(message):
     chat_id = message.chat.id
     user_states[chat_id]["parent_phone"] = message.text.strip()
-    calendar, step = DetailedTelegramCalendar().build()
-    bot.send_message(chat_id, "Выберите дату начала абонемента:", reply_markup=calendar)
+    msg = bot.send_message(chat_id, "Введите сумму сколько оплатили:")
+    bot.register_next_step_handler(msg, how_much_was_paid)
 
-# ловилю функцию колбек с функции DetailedTelegramCalendar и делаю тут финал регистрации
+def how_much_was_paid(message):
+    chat_id = message.chat.id
+    user_states[chat_id]["how_much_was_price"] = message.text.strip()
+    markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add("Груповые тренеровки")
+    markup.add("Персональные тренеровки")
+    msg = bot.send_message(chat_id, "Выберите тип тренеровки:" , reply_markup=markup)
+    bot.register_next_step_handler(msg, training_type)
+    
+def training_type(message):
+    chat_id = message.chat.id
+    user_states[chat_id]["training_type"] = message.text.strip()
+    
+    remove_markup = telebot.types.ReplyKeyboardRemove()
+    calendar, step = DetailedTelegramCalendar().build()
+    bot.send_message(chat_id, "Выберите дату начала абонемента:", reply_markup=remove_markup)
+    bot.send_message(chat_id, "📅 Выберите дату:", reply_markup=calendar)
+    
+   
 @bot.callback_query_handler(func=DetailedTelegramCalendar.func())
 def handle_calendar(call):
     chat_id = call.message.chat.id
@@ -348,21 +396,33 @@ def handle_calendar(call):
         finish_date = start_date + relativedelta(months=1)
         
         data = user_states[chat_id]
-        
         conn, cur = db_connect()
-        cur.execute(
-            "INSERT INTO clients (name, phone, parent_name, parent_phone, start_date, finish_date, telegram_id, telegram_username) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (data["name"], data["phone"], data["parent_name"], data["parent_phone"],
-             start_date.strftime("%d.%m.%Y"), finish_date.strftime("%d.%m.%Y"), data["telegram_id"], data["telegram_username"])
-        )
+        
+        if data.get("action") == "renew":
+            # Продление — UPDATE
+            cur.execute(
+                "UPDATE clients SET start_date = ?, finish_date = ?, is_expiried = ? WHERE id = ?",
+                (start_date.strftime("%d.%m.%Y"), finish_date.strftime("%d.%m.%Y"), 0 ,data["client_id"])
+            )
+            bot.edit_message_text(
+                f'✅ Подписка продлена для {data["client_name"]}!\n📅 Абонемент: {start_date.strftime("%d.%m.%Y")} - {finish_date.strftime("%d.%m.%Y")}',
+                chat_id, call.message.message_id
+            )
+        else:
+            # Регистрация — INSERT
+            cur.execute(
+                "INSERT INTO clients (name, phone, parent_name, parent_phone, start_date, finish_date, telegram_id, telegram_username) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (data["name"], data["phone"], data["parent_name"], data["parent_phone"],
+                 start_date.strftime("%d.%m.%Y"), finish_date.strftime("%d.%m.%Y"), data["telegram_id"], data["telegram_username"])
+            )
+            bot.edit_message_text(
+                f'✅ Регистрация завершена!\n📅 Абонемент: {start_date.strftime("%d.%m.%Y")} - {finish_date.strftime("%d.%m.%Y")}',
+                chat_id, call.message.message_id
+            )
+        
         db_close_connect(conn, save=True)
-        
-        bot.edit_message_text(
-            f'✅ Регистрация завершена!\n📅 Абонемент: {start_date.strftime("%d.%m.%Y")} - {finish_date.strftime("%d.%m.%Y")}',
-            chat_id, call.message.message_id
-        )
-        
         del user_states[chat_id]
+        
         markup = make_admin_markup()
         msg = bot.send_message(chat_id, "Возвращаемся в админ панель:", reply_markup=markup)
         bot.register_next_step_handler(msg, choose_admin_function)
@@ -379,7 +439,7 @@ def start(message):
 # START POLLING
 # --------------------------------------------------------------------------
 
-# subscription_thread = threading.Thread(target=check_subscriptions, daemon=True)
-# subscription_thread.start()
+subscription_thread = threading.Thread(target=check_subscriptions, daemon=True)
+subscription_thread.start()
 
 bot.infinity_polling()
