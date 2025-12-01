@@ -41,8 +41,10 @@ def init_db():
             finish_date TEXT,
             is_expiried BOOLEAN DEFAULT FALSE,
             how_much_was_price TEXT,
+            training_type TEXT,
             telegram_id INTEGER,
             telegram_username TEXT,
+            comment TEXT,
             role TEXT DEFAULT 'user'
         )
     ''')
@@ -178,16 +180,22 @@ def perform_search(message):
         return
 
     for r in find_users:
+        expired_status = "Да" if r[7] == 1 else "Нет"
         text = (
-            f"🆔 Tg: @{r[9]} | id: {r[8]}\n"
+            
+            f"🆔 Tg: @{r[11]} | id: {r[10]}\n"
             f"👤 Имя: {r[1]}\n"
             f"📱 Телефон: {r[2]}\n"
             f"👨‍👩‍👧 Родитель: {r[3]}\n"
             f"📞 Тел. родителя: {r[4]}\n"
             f"📅 Дата оплаты абонемента: {r[5]}\n"
             f"📅 Дата окончанния абонемента: {r[6]}\n"
-            f"📅 Абонемент закончился ?: {r[7]}\n"
+            f"📅 Абонемент закончился ?: {expired_status}\n"
+            f"💵 Сколько внес денег: {r[8]}\n"
+            f"🤾‍♀️ Тип тренеровок: {r[9]}\n"
         )
+        if r[12]:
+            text += f"📝 Примечание: {r[12]}\n"
         
         # Создаём инлайн-кнопки для каждого пользователя
         inline_markup = telebot.types.InlineKeyboardMarkup()
@@ -219,6 +227,8 @@ def handle_edit(call):
     inline_markup.add(telebot.types.InlineKeyboardButton("Изменить родителя", callback_data=f"chparent_{user_id}"))
     inline_markup.add(telebot.types.InlineKeyboardButton("Изменить телефон родителя", callback_data=f"chparentphone_{user_id}"))
     inline_markup.add(telebot.types.InlineKeyboardButton("Продлить абонемент", callback_data=f"renew_subscription_{user_id}"))
+    inline_markup.add(telebot.types.InlineKeyboardButton("Редактировать внесенную сумму", callback_data=f"csumm_{user_id}"))
+    inline_markup.add(telebot.types.InlineKeyboardButton("Добавить коментарий к клиенту", callback_data=f"add_comment{user_id}"))
     
     bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=inline_markup)
     bot.answer_callback_query(call.id)
@@ -253,6 +263,22 @@ def handle_edit_parent(call):
     cancale_btn = cancel_action()
     msg = bot.send_message(call.message.chat.id, "Введите имя родителя:", reply_markup=cancale_btn)
     bot.register_next_step_handler(msg, save_new_value, user_id, "parent_name")
+    bot.answer_callback_query(call.id)
+    
+@bot.callback_query_handler(func=lambda call: call.data.startswith("csumm_"))
+def handle_edit_parent(call):
+    user_id = call.data.split("_")[1]
+    cancale_btn = cancel_action()
+    msg = bot.send_message(call.message.chat.id, "Введите новую сумму:", reply_markup=cancale_btn)
+    bot.register_next_step_handler(msg, save_new_value, user_id, "how_much_was_price")
+    bot.answer_callback_query(call.id)
+    
+@bot.callback_query_handler(func=lambda call: call.data.startswith("add_comment_"))
+def handle_edit_parent(call):
+    user_id = call.data.split("_")[2]
+    cancale_btn = cancel_action()
+    msg = bot.send_message(call.message.chat.id, "Введите комент:", reply_markup=cancale_btn)
+    bot.register_next_step_handler(msg, save_new_value, user_id, "comment")
     bot.answer_callback_query(call.id)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("renew_subscription_"))
@@ -309,17 +335,22 @@ def show_all_users(message):
 
     text = "📋 *Список пользователей:*\n\n"
     for r in rows:
+        expired_status = "Да" if r[7] == 1 else "Нет"
+          
         text += (
-            f"🆔 Tg: @{r[9]} | id: {r[8]}\n"
+            f"🆔 Tg: @{r[11]} | id: {r[10]}\n"
             f"👤 Имя: {r[1]}\n"
             f"📱 Телефон: {r[2]}\n"
             f"👨‍👩‍👧 Родитель: {r[3]}\n"
             f"📞 Тел. родителя: {r[4]}\n"
             f"📅 Дата оплаты абонемента: {r[5]}\n"
             f"📅 Дата окончанния абонемента: {r[6]}\n"
-            f"📅 Абонемент закончился ?: {r[7]}\n\n"
+            f"📅 Абонемент закончился ?: {expired_status}\n"
+            f"💵 Сколько внес денег: {r[8]}\n"
+            f"🤾‍♀️ Тип тренеровок: {r[9]}\n"
         )
-
+    if r[12]:
+        text += f"📝 Примечание: {r[12]}\n"
     msg = send_long(message.chat.id, text)
     bot.register_next_step_handler(msg, choose_admin_function)
 
@@ -368,8 +399,8 @@ def how_much_was_paid(message):
     chat_id = message.chat.id
     user_states[chat_id]["how_much_was_price"] = message.text.strip()
     markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add("Груповые тренеровки")
-    markup.add("Персональные тренеровки")
+    markup.add("Обычный")
+    markup.add("Безлимит")
     msg = bot.send_message(chat_id, "Выберите тип тренеровки:" , reply_markup=markup)
     bot.register_next_step_handler(msg, training_type)
     
@@ -410,9 +441,9 @@ def handle_calendar(call):
         else:
             # Регистрация — INSERT
             cur.execute(
-                "INSERT INTO clients (name, phone, parent_name, parent_phone, start_date, finish_date, telegram_id, telegram_username) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO clients (name, phone, parent_name, parent_phone, start_date, finish_date, how_much_was_price, training_type,telegram_id, telegram_username) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (data["name"], data["phone"], data["parent_name"], data["parent_phone"],
-                 start_date.strftime("%d.%m.%Y"), finish_date.strftime("%d.%m.%Y"), data["telegram_id"], data["telegram_username"])
+                 start_date.strftime("%d.%m.%Y"), finish_date.strftime("%d.%m.%Y"), data["how_much_was_price"], data["training_type"], data["telegram_id"], data["telegram_username"])
             )
             bot.edit_message_text(
                 f'✅ Регистрация завершена!\n📅 Абонемент: {start_date.strftime("%d.%m.%Y")} - {finish_date.strftime("%d.%m.%Y")}',
