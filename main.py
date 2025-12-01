@@ -88,9 +88,10 @@ def check_subscriptions():
                     for admin_id in ADMIN_IDS:
                         bot.send_message(
                             admin_id,
-                            f"❌ Абонемент {name} @{telegram_username} истек сегодня!"
+                            f"❌ Абонемент {name} @{telegram_username} истекает сегодня!"
                         )
                         
+                        # todo сделать когда дни уходят в -
             except ValueError:
                 continue
         
