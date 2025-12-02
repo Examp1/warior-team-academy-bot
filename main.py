@@ -45,7 +45,8 @@ def init_db():
             telegram_id INTEGER,
             telegram_username TEXT,
             comment TEXT,
-            role TEXT DEFAULT 'user'
+            role TEXT DEFAULT 'user',
+            birthday TEXT
         )
     ''')
     db_close_connect(conn, save=True)
@@ -186,6 +187,7 @@ def perform_search(message):
             
             f"🆔 Tg: @{r[11]} | id: {r[10]}\n"
             f"👤 Имя: {r[1]}\n"
+            f"📅 Дата рождения: {r[14]}\n"
             f"📱 Телефон: {r[2]}\n"
             f"👨‍👩‍👧 Родитель: {r[3]}\n"
             f"📞 Тел. родителя: {r[4]}\n"
@@ -224,12 +226,13 @@ def handle_edit(call):
     user_id = call.data.split("_")[1]
     inline_markup = telebot.types.InlineKeyboardMarkup()
     inline_markup.add(telebot.types.InlineKeyboardButton("Изменить имя", callback_data=f"chname_{user_id}"))
+    inline_markup.add(telebot.types.InlineKeyboardButton("Изменить дату рожения", callback_data=f"cbirthday_{user_id}"))
     inline_markup.add(telebot.types.InlineKeyboardButton("Изменить телефон", callback_data=f"chphone_{user_id}"))
     inline_markup.add(telebot.types.InlineKeyboardButton("Изменить родителя", callback_data=f"chparent_{user_id}"))
     inline_markup.add(telebot.types.InlineKeyboardButton("Изменить телефон родителя", callback_data=f"chparentphone_{user_id}"))
     inline_markup.add(telebot.types.InlineKeyboardButton("Продлить абонемент", callback_data=f"renew_subscription_{user_id}"))
     inline_markup.add(telebot.types.InlineKeyboardButton("Редактировать внесенную сумму", callback_data=f"csumm_{user_id}"))
-    inline_markup.add(telebot.types.InlineKeyboardButton("Добавить коментарий к клиенту", callback_data=f"add_comment{user_id}"))
+    inline_markup.add(telebot.types.InlineKeyboardButton("Добавить коментарий к клиенту", callback_data=f"add_comment_{user_id}"))
     
     bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=inline_markup)
     bot.answer_callback_query(call.id)
@@ -240,6 +243,13 @@ def handle_edit_name(call):
     cancale_btn = cancel_action()
     msg = bot.send_message(call.message.chat.id, "Введите новое имя:", reply_markup=cancale_btn)
     bot.register_next_step_handler(msg, save_new_value, user_id, "name")
+    
+@bot.callback_query_handler(func=lambda call: call.data.startswith("cbirthday_"))
+def handle_edit_name(call):
+    user_id = call.data.split("_")[1]
+    cancale_btn = cancel_action()
+    msg = bot.send_message(call.message.chat.id, "Введите новую дату:", reply_markup=cancale_btn)
+    bot.register_next_step_handler(msg, save_new_value, user_id, "birthday")
     bot.answer_callback_query(call.id)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("chphone_"))
@@ -341,6 +351,7 @@ def show_all_users(message):
         text += (
             f"🆔 Tg: @{r[11]} | id: {r[10]}\n"
             f"👤 Имя: {r[1]}\n"
+            f"📅 Дата рождения: {r[14]}\n"
             f"📱 Телефон: {r[2]}\n"
             f"👨‍👩‍👧 Родитель: {r[3]}\n"
             f"📞 Тел. родителя: {r[4]}\n"
@@ -350,8 +361,11 @@ def show_all_users(message):
             f"💵 Сколько внес денег: {r[8]}\n"
             f"🤾‍♀️ Тип тренеровок: {r[9]}\n"
         )
-    if r[12]:
-        text += f"📝 Примечание: {r[12]}\n"
+        if r[12]:
+            text += f"📝 Примечание: {r[12]}\n"
+
+        text += f"\n\n"
+        
     msg = send_long(message.chat.id, text)
     bot.register_next_step_handler(msg, choose_admin_function)
 
@@ -366,15 +380,17 @@ def start_register(message):
     msg = bot.send_message(chat_id, "Введите имя пользователя:", reply_markup=remove_markup)
     bot.register_next_step_handler(msg, reg_name)
 
-
 def reg_name(message):
     chat_id = message.chat.id
     user_states[chat_id]["name"] = message.text.strip()
-    user_states[chat_id]["telegram_id"] = message.chat.id
-    user_states[chat_id]["telegram_username"] = message.chat.username
+    msg = bot.send_message(chat_id, "Введите дату рождения:")
+    bot.register_next_step_handler(msg, reg_birthday)
+    
+def reg_birthday(message):
+    chat_id = message.chat.id
+    user_states[chat_id]["birthday"] = message.text.strip()
     msg = bot.send_message(chat_id, "Введите номер телефона:")
     bot.register_next_step_handler(msg, reg_phone)
-
 
 def reg_phone(message):
     chat_id = message.chat.id
@@ -382,13 +398,11 @@ def reg_phone(message):
     msg = bot.send_message(chat_id, "Введите ФИО родителя:")
     bot.register_next_step_handler(msg, reg_parent_name)
 
-
 def reg_parent_name(message):
     chat_id = message.chat.id
     user_states[chat_id]["parent_name"] = message.text.strip()
     msg = bot.send_message(chat_id, "Введите номер телефона родителя:")
     bot.register_next_step_handler(msg, reg_parent_phone)
-
 
 def reg_parent_phone(message):
     chat_id = message.chat.id
@@ -442,9 +456,9 @@ def handle_calendar(call):
         else:
             # Регистрация — INSERT
             cur.execute(
-                "INSERT INTO clients (name, phone, parent_name, parent_phone, start_date, finish_date, how_much_was_price, training_type,telegram_id, telegram_username) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (data["name"], data["phone"], data["parent_name"], data["parent_phone"],
-                 start_date.strftime("%d.%m.%Y"), finish_date.strftime("%d.%m.%Y"), data["how_much_was_price"], data["training_type"], data["telegram_id"], data["telegram_username"])
+                "INSERT INTO clients (name, birthday, phone, parent_name, parent_phone, start_date, finish_date, how_much_was_price, training_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (data["name"], data['birthday'], data["phone"], data["parent_name"], data["parent_phone"],
+                 start_date.strftime("%d.%m.%Y"), finish_date.strftime("%d.%m.%Y"), data["how_much_was_price"], data["training_type"])
             )
             bot.edit_message_text(
                 f'✅ Регистрация завершена!\n📅 Абонемент: {start_date.strftime("%d.%m.%Y")} - {finish_date.strftime("%d.%m.%Y")}',
