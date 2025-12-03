@@ -59,7 +59,6 @@ init_db()
 # --------------------------------------------------------------------------
 
 def safe_send(chat_id, text):
-    """Безопасная отправка — не падает если чат недоступен"""
     try:
         bot.send_message(chat_id, text)
         return True
@@ -70,15 +69,15 @@ def safe_send(chat_id, text):
 def check_subscriptions():
     while True:
         conn, cur = db_connect()
-        cur.execute("SELECT id, name, telegram_username, finish_date FROM clients")
+        cur.execute("SELECT id, name, telegram_id, telegram_username, finish_date, is_expiried FROM clients")
         rows = cur.fetchall()
         db_close_connect(conn)
         
         today = datetime.now().date()
+        to_update = []
         
         for row in rows:
-            user_id, name, telegram_username, finish_date_str = row
-            print(f"ID={user_id}, name='{name}', finish_date='{finish_date_str}'")
+            user_id, name, telegram_id, telegram_username, finish_date_str, is_expiried = row
             
             if not finish_date_str:
                 continue
@@ -89,31 +88,38 @@ def check_subscriptions():
                 
                 if days_left == 1:
                     for admin_id in ADMIN_IDS:
-                        safe_send(
-                            admin_id,
-                            f"⚠️ Абонемент {name} @{telegram_username} истекает завтра ({finish_date_str})"
-                        )
-                elif days_left == 0:
-                    conn, cur = db_connect() 
-                    cur.execute("UPDATE clients SET is_expiried = TRUE WHERE id = ?", (user_id,))
-                    db_close_connect(conn, save=True)
+                        safe_send(admin_id, f"⚠️ Абонемент {name} @{telegram_username} истекает завтра ({finish_date_str})")
+                    if telegram_id:
+                        safe_send(telegram_id, f"⚠️ {name}, ваш абонемент истекает завтра!")
+                        
+                elif days_left <= 0:
+                    # Обновляем только если ещё не помечен как истёкший
+                    to_update.append(user_id)
+                    
+                    if days_left == 0:
+                        msg = f"❌ Абонемент {name} @{telegram_username} истекает сегодня!"
+                    else:
+                        msg = f"❌ Абонемент {name} @{telegram_username} истёк {finish_date_str}!"
+                    
+                    if days_left == 0:
+                        msg2 = f"❌ Ваш абонемент {name} истекает сегодня!"
+                    else:
+                        msg2 = f"❌ Ваш абонемент {name} истёк {finish_date_str}!"
+                    
                     for admin_id in ADMIN_IDS:
-                        safe_send(
-                            admin_id,
-                            f"❌ Абонемент {name} @{telegram_username} истекает сегодня!"
-                        )
-                elif days_left < 0:
-                    conn, cur = db_connect() 
-                    cur.execute("UPDATE clients SET is_expiried = TRUE WHERE id = ?", (user_id,))
-                    db_close_connect(conn, save=True)
-                    for admin_id in ADMIN_IDS:
-                        safe_send(
-                            admin_id,
-                            f"❌ Абонемент {name} @{telegram_username} истёк {abs(days_left)} дней назад!"
-                        )
+                        safe_send(admin_id, msg)
+                    if telegram_id:
+                        safe_send(telegram_id, msg2)
+                        
             except ValueError as e:
-                print(f"Ошибка парсинга даты у {name}: {e}")  # отладка
+                print(f"Ошибка парсинга даты у {name}: {e}")
                 continue
+        
+        # Один UPDATE после цикла
+        if to_update:
+            conn, cur = db_connect()
+            cur.executemany("UPDATE clients SET is_expiried = TRUE WHERE id = ?", [(uid,) for uid in to_update])
+            db_close_connect(conn, save=True)
         
         time.sleep(86400)
 
@@ -122,6 +128,19 @@ def check_subscriptions():
 # --------------------------------------------------------------------------
 # HELPERS
 # --------------------------------------------------------------------------
+
+COMMANDS = ['/start', '/admin']
+
+def with_command_check(func):
+    def wrapper(message, *args, **kwargs):
+        if message.text in COMMANDS:
+            if message.text == '/start':
+                start(message)
+            elif message.text == '/admin':
+                admin(message)
+            return
+        return func(message, *args, **kwargs)
+    return wrapper
 
 # отправка длинных сообщений
 def send_long(chat_id, text, markup=None):
@@ -163,7 +182,6 @@ def sign_in_admin(message):
     markup = make_admin_markup()
     msg = bot.send_message(message.chat.id, "Добро пожаловать в админ панель:", reply_markup=markup)
     bot.register_next_step_handler(msg, choose_admin_function)
-
 
 def choose_admin_function(message):
     if message.text == "Просмотреть всех пользователей":
@@ -478,7 +496,76 @@ def handle_calendar(call):
 
 @bot.message_handler(commands=['start'])
 def start(message):
-    bot.send_message(message.chat.id, f'Добро пожаловать! Ваш ID: {message.chat.id}')
+    user = auto_login_user(message)  # Без декоратора! Это просто функция запроса к БД
+    if user:
+        markup = telebot.types.InlineKeyboardMarkup()
+        btn1 = telebot.types.InlineKeyboardButton("Мой абонемент", callback_data="my_subscription")
+        btn2 = telebot.types.InlineKeyboardButton("Связаться с администратором", callback_data="contact_admin")
+        markup.row(btn1, btn2)
+        bot.send_message(message.chat.id, f'✅ Вы успешно вошли, {user["name"]}!', reply_markup=markup)
+    else:
+        msg = bot.send_message(message.chat.id, f'Добро пожаловать, {message.from_user.first_name}! Введите свой номер телефона указанный при регистрации.')
+        bot.register_next_step_handler(msg, login_user)
+
+
+def auto_login_user(message):
+    conn, cur = db_connect()
+    cur.execute("SELECT * FROM clients WHERE telegram_username = ?", (message.from_user.username,))  # execute, не excute! И кортеж!
+    user = cur.fetchone()
+    db_close_connect(conn)
+    return user
+
+
+def login_user(message):
+    phone = message.text.strip()
+    conn, cur = db_connect()
+    cur.execute("SELECT * FROM clients WHERE phone = ? OR parent_phone = ?", (phone, phone))
+    user = cur.fetchone()
+    db_close_connect(conn)
+
+    if user:
+        markup = telebot.types.InlineKeyboardMarkup()
+        btn1 = telebot.types.InlineKeyboardButton("Мой абонемент", callback_data="my_subscription")
+        btn2 = telebot.types.InlineKeyboardButton("Связаться с администратором", callback_data="contact_admin")
+        markup.row(btn1, btn2)
+        bot.send_message(message.chat.id, f'✅ Вы успешно вошли, {user["name"]}!', reply_markup=markup)
+        
+        # Сохраняем telegram данные
+        conn, cur = db_connect()
+        cur.execute("UPDATE clients SET telegram_id = ?, telegram_username = ? WHERE id = ?", 
+                    (message.chat.id, message.from_user.username, user["id"]))
+        db_close_connect(conn, save=True)
+    else:
+        bot.send_message(message.chat.id, '❌ Пользователь с таким номером не найден. Пожалуйста, свяжитесь с администратором.')
+
+
+def choose_user_function(message):
+    bot.send_message(message.chat.id, "Выберите функцию.")
+    
+@bot.callback_query_handler(func=lambda call: True)
+def callback_handler(call):
+    if call.data == "my_subscription":
+        conn, cur = db_connect()
+        cur.execute("SELECT start_date, finish_date, is_expiried FROM clients WHERE telegram_id = ?", (call.message.chat.id,))
+        user = cur.fetchone()
+        db_close_connect(conn)
+
+        if user:
+            abonement_status = "✔️ Активен" if user['is_expiried'] == 0 else "❌ Истёк"
+            
+            text = (
+                f"📅 Дата оплаты абонемента: {user['start_date']}\n"
+                f"📅 Дата окончанния абонемента: {user['finish_date']}\n"
+                f"📅 Cтатус абонемента : {abonement_status}\n"
+            )
+            bot.send_message(call.message.chat.id, text)
+        else:
+            bot.send_message(call.message.chat.id, "❌ Пользователь не найден.")
+    
+    elif call.data == "contact_admin":
+        bot.send_message(call.message.chat.id, f"Свяжитесь с администратором:\n @nfllex, @Nokortt, @Mrrrimp")
+    
+    bot.answer_callback_query(call.id)
 
 # --------------------------------------------------------------------------
 # START POLLING
