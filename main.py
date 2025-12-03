@@ -162,6 +162,7 @@ def make_admin_markup():
     markup.add("Просмотреть всех пользователей")
     markup.add("Регистрация пользователя")
     markup.add("Поиск пользователя по базе")
+    markup.add("Продлить все абонементы на N дней")
     return markup
 
 def cancel_action():
@@ -190,6 +191,8 @@ def choose_admin_function(message):
         start_register(message)
     elif message.text == "Поиск пользователя по базе":
         start_search(message)
+    elif message.text == "Продлить все абонементы на N дней":
+        renew_all_subscription(message)
     else:
         markup = make_admin_markup()
         msg = bot.send_message(message.chat.id, "Неизвестная команда. Выберите кнопку.", reply_markup=markup)
@@ -245,6 +248,48 @@ def perform_search(message):
         )
         bot.send_message(message.chat.id, text, reply_markup=inline_markup)
 
+
+# --------------------------------------------------------------------------
+# USERS ACTIONS 
+# --------------------------------------------------------------------------
+
+def renew_all_subscription(message):
+    chat_id = message.chat.id
+    msg = bot.send_message(chat_id, "Введите количество дней для продления:")
+    bot.register_next_step_handler(msg, process_renew_all)
+
+def process_renew_all(message):
+    chat_id = message.chat.id
+    
+    try:
+        days = int(message.text.strip())
+    except ValueError:
+        msg = bot.send_message(chat_id, "❌ Введите число!")
+        bot.register_next_step_handler(msg, process_renew_all)
+        return
+    
+    conn, cur = db_connect()
+    cur.execute("SELECT id, finish_date FROM clients")
+    clients = cur.fetchall()
+    
+    updated = 0
+    for client in clients:
+        if not client["finish_date"]:
+            continue
+        try:
+            finish_date = datetime.strptime(client["finish_date"], "%d.%m.%Y").date()
+            new_finish_date = finish_date + relativedelta(days=days)
+            cur.execute("UPDATE clients SET finish_date = ?, is_expiried = FALSE WHERE id = ?", 
+                       (new_finish_date.strftime("%d.%m.%Y"), client["id"]))
+            updated += 1
+        except ValueError:
+            continue
+    
+    db_close_connect(conn, save=True)
+    
+    markup = make_admin_markup()
+    msg = bot.send_message(chat_id, f"✅ Продлено {updated} абонементов на {days} дней!", reply_markup=markup)
+    bot.register_next_step_handler(msg, choose_admin_function)
 # --------------------------------------------------------------------------
 # USERS ACTIONS 
 # --------------------------------------------------------------------------
