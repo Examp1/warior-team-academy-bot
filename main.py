@@ -219,82 +219,64 @@ def handle_delete(call):
     curr.execute("DELETE FROM clients WHERE id = ?", (user_id,))
     db_close_connect(conn, save=True)
     bot.delete_message(call.message.chat.id, call.message.message_id)
-    msg = bot.answer_callback_query(call.id, "Удалено!")
+    bot.answer_callback_query(call.id, "Удалено!")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("edit_"))
 def handle_edit(call):
     user_id = call.data.split("_")[1]
     inline_markup = telebot.types.InlineKeyboardMarkup()
-    inline_markup.add(telebot.types.InlineKeyboardButton("Изменить имя", callback_data=f"chname_{user_id}"))
-    inline_markup.add(telebot.types.InlineKeyboardButton("Изменить дату рожения", callback_data=f"cbirthday_{user_id}"))
-    inline_markup.add(telebot.types.InlineKeyboardButton("Изменить телефон", callback_data=f"chphone_{user_id}"))
-    inline_markup.add(telebot.types.InlineKeyboardButton("Изменить родителя", callback_data=f"chparent_{user_id}"))
-    inline_markup.add(telebot.types.InlineKeyboardButton("Изменить телефон родителя", callback_data=f"chparentphone_{user_id}"))
-    inline_markup.add(telebot.types.InlineKeyboardButton("Продлить абонемент", callback_data=f"renew_subscription_{user_id}"))
-    inline_markup.add(telebot.types.InlineKeyboardButton("Редактировать внесенную сумму", callback_data=f"csumm_{user_id}"))
-    inline_markup.add(telebot.types.InlineKeyboardButton("Добавить коментарий к клиенту", callback_data=f"add_comment_{user_id}"))
+    inline_markup.add(telebot.types.InlineKeyboardButton("Изменить имя", callback_data=f"chname_{user_id}"), telebot.types.InlineKeyboardButton("Изменить дату рожения", callback_data=f"cbirthday_{user_id}"))
+    inline_markup.add(telebot.types.InlineKeyboardButton("Изменить телефон", callback_data=f"chphone_{user_id}"), telebot.types.InlineKeyboardButton("Изменить родителя", callback_data=f"chparent_{user_id}"))
+    inline_markup.add(telebot.types.InlineKeyboardButton("Изменить телефон родителя", callback_data=f"chparentphone_{user_id}"), telebot.types.InlineKeyboardButton("Редактировать внесенную сумму", callback_data=f"cSumm_{user_id}"))
+    inline_markup.add(telebot.types.InlineKeyboardButton("Продлить абонемент", callback_data=f"renewSubscription_{user_id}"), telebot.types.InlineKeyboardButton("Редактировать тип абонемента", callback_data=f"cTrainingType_{user_id}"))
+    inline_markup.add(telebot.types.InlineKeyboardButton("Добавить коментарий к клиенту", callback_data=f"addComment_{user_id}"))
     
     bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=inline_markup)
     bot.answer_callback_query(call.id)
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith("chname_"))
-def handle_edit_name(call):
-    user_id = call.data.split("_")[1]
-    cancale_btn = cancel_action()
-    msg = bot.send_message(call.message.chat.id, "Введите новое имя:", reply_markup=cancale_btn)
-    bot.register_next_step_handler(msg, save_new_value, user_id, "name")
+EDIT_FIELDS = {
+    "chname": {"field": "name", "prompt": "Введите новое имя:"},
+    "cbirthday": {"field": "birthday", "prompt": "Введите новую дату:"},
+    "chphone": {"field": "phone", "prompt": "Введите новый телефон:"},
+    "chparent": {"field": "parent_name", "prompt": "Введите имя родителя:"},
+    "chparentphone": {"field": "parent_phone", "prompt": "Введите телефон родителя:"},
+    "cSumm": {"field": "how_much_was_price", "prompt": "Введите новую сумму:"},
+    "cTrainingType": {"field": "training_type", "prompt": "Введите тип абонемента:", "options": ["Обычный", "Безлимит"] },
+    "addComment": {"field": "comment", "prompt": "Введите комментарий:"},
+}
+
+def is_edit_callback(call):
+    prefix = call.data.split("_")[0]
+    return prefix in EDIT_FIELDS
+
+@bot.callback_query_handler(func=is_edit_callback)
+def handle_edit_field(call):
+    parts = call.data.split("_")
+    prefix = parts[0]
+    user_id = parts[1]
     
-@bot.callback_query_handler(func=lambda call: call.data.startswith("cbirthday_"))
-def handle_edit_name(call):
-    user_id = call.data.split("_")[1]
-    cancale_btn = cancel_action()
-    msg = bot.send_message(call.message.chat.id, "Введите новую дату:", reply_markup=cancale_btn)
-    bot.register_next_step_handler(msg, save_new_value, user_id, "birthday")
-    bot.answer_callback_query(call.id)
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("chphone_"))
-def handle_edit_phone(call):
-    user_id = call.data.split("_")[1]
-    cancale_btn = cancel_action()
-    msg = bot.send_message(call.message.chat.id, "Введите новый телефон:", reply_markup=cancale_btn)
-    bot.register_next_step_handler(msg, save_new_value, user_id, "phone")
-    bot.answer_callback_query(call.id)
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("chparentphone_"))
-def handle_edit_parent_phone(call):
-    user_id = call.data.split("_")[1]
-    cancale_btn = cancel_action()
-    msg = bot.send_message(call.message.chat.id, "Введите телефон родителя:", reply_markup=cancale_btn)
-    bot.register_next_step_handler(msg, save_new_value, user_id, "parent_phone")
-    bot.answer_callback_query(call.id)
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("chparent_"))
-def handle_edit_parent(call):
-    user_id = call.data.split("_")[1]
-    cancale_btn = cancel_action()
-    msg = bot.send_message(call.message.chat.id, "Введите имя родителя:", reply_markup=cancale_btn)
-    bot.register_next_step_handler(msg, save_new_value, user_id, "parent_name")
-    bot.answer_callback_query(call.id)
+    config = EDIT_FIELDS[prefix]
     
-@bot.callback_query_handler(func=lambda call: call.data.startswith("csumm_"))
-def handle_edit_parent(call):
-    user_id = call.data.split("_")[1]
-    cancale_btn = cancel_action()
-    msg = bot.send_message(call.message.chat.id, "Введите новую сумму:", reply_markup=cancale_btn)
-    bot.register_next_step_handler(msg, save_new_value, user_id, "how_much_was_price")
-    bot.answer_callback_query(call.id)
+    # Проверяем, есть ли варианты для выбора
+    if "options" in config:
+        markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
+        for option in config["options"]:
+            markup.add(option)
+        markup.add("Отмените действие")
+    else:
+        markup = cancel_action()
     
-@bot.callback_query_handler(func=lambda call: call.data.startswith("add_comment_"))
-def handle_edit_parent(call):
-    user_id = call.data.split("_")[2]
-    cancale_btn = cancel_action()
-    msg = bot.send_message(call.message.chat.id, "Введите комент:", reply_markup=cancale_btn)
-    bot.register_next_step_handler(msg, save_new_value, user_id, "comment")
+    msg = bot.send_message(
+        call.message.chat.id, 
+        config["prompt"], 
+        reply_markup=markup
+    )
+    bot.register_next_step_handler(msg, save_new_value, user_id, config["field"])
     bot.answer_callback_query(call.id)
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith("renew_subscription_"))
+@bot.callback_query_handler(func=lambda call: call.data.startswith("renewSubscription_"))
 def handle_edit_parent(call):
-    user_id = call.data.split("_")[2]
+    user_id = call.data.split("_")[1]
     chat_id = call.message.chat.id
     # cancale_btn = cancel_action()
     conn, cur = db_connect()
