@@ -553,14 +553,12 @@ def start(message):
         msg = bot.send_message(message.chat.id, f'Добро пожаловать, {message.from_user.first_name}! Введите свой номер телефона указанный при регистрации.')
         bot.register_next_step_handler(msg, login_user)
 
-
 def auto_login_user(message):
     conn, cur = db_connect()
     cur.execute("SELECT * FROM clients WHERE telegram_username = ?", (message.from_user.username,))  # execute, не excute! И кортеж!
     user = cur.fetchone()
     db_close_connect(conn)
     return user
-
 
 def login_user(message):
     phone = message.text.strip()
