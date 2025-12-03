@@ -58,46 +58,65 @@ init_db()
 # CHECK SUBSCRIBTIONS
 # --------------------------------------------------------------------------
 
+def safe_send(chat_id, text):
+    """Безопасная отправка — не падает если чат недоступен"""
+    try:
+        bot.send_message(chat_id, text)
+        return True
+    except Exception as e:
+        print(f"Не удалось отправить сообщение {chat_id}: {e}")
+        return False
+
 def check_subscriptions():
-    while True: #делаем бесконечный цикл
-        conn, cur = db_connect() #конект к бд
-        cur.execute("SELECT id, name, telegram_username, finish_date FROM clients") #достаем всех клиентов
-        rows = cur.fetchall() #получаем клиентов в перменную row
-        db_close_connect(conn) # закрываем конект к бд
+    while True:
+        conn, cur = db_connect()
+        cur.execute("SELECT id, name, telegram_username, finish_date FROM clients")
+        rows = cur.fetchall()
+        db_close_connect(conn)
         
-        today = datetime.now().date() # получаем текущую дату
+        today = datetime.now().date()
         
         for row in rows:
-            user_id, name, telegram_username, finish_date_str = row # деструкторизируем
+            user_id, name, telegram_username, finish_date_str = row
+            print(f"ID={user_id}, name='{name}', finish_date='{finish_date_str}'")
             
-            if not finish_date_str:  # если finish_date пустое/None/""
-                continue             # пропускаем этого клиента, переходим к следующему
+            if not finish_date_str:
+                continue
                 
-            try: # делаем трай , чтобы если что-то не так выбрасывать ошибку 
-                finish_date = datetime.strptime(finish_date_str, "%d.%m.%Y").date() # получаем финиш дату 
-                days_left = (finish_date - today).days # высчитываем сколько дней осталось
+            try:
+                finish_date = datetime.strptime(finish_date_str, "%d.%m.%Y").date()
+                days_left = (finish_date - today).days
                 
-                if days_left == 1: # если 1 , то кидаем сообщение админам
+                if days_left == 1:
                     for admin_id in ADMIN_IDS:
-                        bot.send_message(
+                        safe_send(
                             admin_id,
                             f"⚠️ Абонемент {name} @{telegram_username} истекает завтра ({finish_date_str})"
                         )
-                elif days_left <= 0:
+                elif days_left == 0:
                     conn, cur = db_connect() 
                     cur.execute("UPDATE clients SET is_expiried = TRUE WHERE id = ?", (user_id,))
                     db_close_connect(conn, save=True)
                     for admin_id in ADMIN_IDS:
-                        bot.send_message(
+                        safe_send(
                             admin_id,
                             f"❌ Абонемент {name} @{telegram_username} истекает сегодня!"
                         )
-                        
-                        # todo сделать когда дни уходят в -
-            except ValueError:
+                elif days_left < 0:
+                    conn, cur = db_connect() 
+                    cur.execute("UPDATE clients SET is_expiried = TRUE WHERE id = ?", (user_id,))
+                    db_close_connect(conn, save=True)
+                    for admin_id in ADMIN_IDS:
+                        safe_send(
+                            admin_id,
+                            f"❌ Абонемент {name} @{telegram_username} истёк {abs(days_left)} дней назад!"
+                        )
+            except ValueError as e:
+                print(f"Ошибка парсинга даты у {name}: {e}")  # отладка
                 continue
         
         time.sleep(86400)
+
 
 
 # --------------------------------------------------------------------------
@@ -183,7 +202,7 @@ def perform_search(message):
         return
 
     for r in find_users:
-        expired_status = "Да" if r[7] == 1 else "Нет"
+        expired_status = "✔️" if r[7] == 1 else "❌"
         text = (
             f"🆔 Tg: @{r['telegram_username']} | id: {r['telegram_id']}\n"
             f"👤 Имя: {r['name']}\n"
@@ -257,7 +276,6 @@ def handle_edit_field(call):
     
     config = EDIT_FIELDS[prefix]
     
-    # Проверяем, есть ли варианты для выбора
     if "options" in config:
         markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
         for option in config["options"]:
@@ -328,7 +346,7 @@ def show_all_users(message):
 
     text = "📋 *Список пользователей:*\n\n"
     for r in rows:
-        expired_status = "Да" if r[7] == 1 else "Нет"
+        expired_status = "✔️" if r[7] == 1 else "❌"
           
         text += (
             f"🆔 Tg: @{r['telegram_username']} | id: {r['telegram_id']}\n"
