@@ -436,62 +436,63 @@ def show_all_users(message):
 # REGISTRATION FSM
 # --------------------------------------------------------------------------
 
+REG_STEPS = [
+    {"field": "name", "prompt": "Введите имя пользователя:"},
+    {"field": "birthday", "prompt": "Введите дату рождения:"},
+    {"field": "phone", "prompt": "Введите номер телефона:"},
+    {"field": "parent_name", "prompt": "Введите ФИО родителя:"},
+    {"field": "parent_phone", "prompt": "Введите номер телефона родителей:"},
+    {"field": "how_much_was_price", "prompt": "Введите сумму сколько оплатили:"},
+    {"field": "training_type", "prompt": "Выберите тип тренеровки:", "options": ["Обычный", "Безлимит"]},
+]
+
 def start_register(message):
-    remove_markup = telebot.types.ReplyKeyboardRemove()
     chat_id = message.chat.id
-    user_states[chat_id] = {}
-    msg = bot.send_message(chat_id, "Введите имя пользователя:", reply_markup=remove_markup)
-    bot.register_next_step_handler(msg, reg_name)
+    user_states[chat_id] = {"step": 0}  # начинаем с шага 0
+    send_step(chat_id)
 
-def reg_name(message):
-    chat_id = message.chat.id
-    user_states[chat_id]["name"] = message.text.strip()
-    msg = bot.send_message(chat_id, "Введите дату рождения:")
-    bot.register_next_step_handler(msg, reg_birthday)
+def send_step(chat_id):
+    step_num = user_states[chat_id]["step"]
+    step = REG_STEPS[step_num]
+    if "options" in step:
+        markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
+        for option in step["options"]:
+            markup.add(option)
+        markup.add("Отмените действие")
+    else:
+        markup = cancel_action()
+    msg = bot.send_message(chat_id, step["prompt"], reply_markup=markup)
+    bot.register_next_step_handler(msg, process_step)
     
-def reg_birthday(message):
+def process_step(message):
     chat_id = message.chat.id
-    user_states[chat_id]["birthday"] = message.text.strip()
-    msg = bot.send_message(chat_id, "Введите номер телефона:")
-    bot.register_next_step_handler(msg, reg_phone)
-
-def reg_phone(message):
-    chat_id = message.chat.id
-    user_states[chat_id]["phone"] = message.text.strip()
-    msg = bot.send_message(chat_id, "Введите ФИО родителя:")
-    bot.register_next_step_handler(msg, reg_parent_name)
-
-def reg_parent_name(message):
-    chat_id = message.chat.id
-    user_states[chat_id]["parent_name"] = message.text.strip()
-    msg = bot.send_message(chat_id, "Введите номер телефона родителя:")
-    bot.register_next_step_handler(msg, reg_parent_phone)
-
-def reg_parent_phone(message):
-    chat_id = message.chat.id
-    user_states[chat_id]["parent_phone"] = message.text.strip()
-    msg = bot.send_message(chat_id, "Введите сумму сколько оплатили:")
-    bot.register_next_step_handler(msg, how_much_was_paid)
-
-def how_much_was_paid(message):
-    chat_id = message.chat.id
-    user_states[chat_id]["how_much_was_price"] = message.text.strip()
-    markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add("Обычный")
-    markup.add("Безлимит")
-    msg = bot.send_message(chat_id, "Выберите тип тренеровки:" , reply_markup=markup)
-    bot.register_next_step_handler(msg, training_type)
     
-def training_type(message):
-    chat_id = message.chat.id
-    user_states[chat_id]["training_type"] = message.text.strip()
+    if message.text == "Отмените действие":
+        del user_states[chat_id]
+        markup = make_admin_markup()
+        msg = bot.send_message(chat_id, "Действие отменено.", reply_markup=markup)
+        bot.register_next_step_handler(msg, choose_admin_function)
+        return
     
+    step_num = user_states[chat_id]["step"]
+    step = REG_STEPS[step_num]
+    
+    user_states[chat_id][step["field"]] = message.text.strip()
+    
+    user_states[chat_id]["step"] += 1
+    
+    if user_states[chat_id]["step"] != 7:
+        send_step(chat_id)
+    else:
+        register_last_step(chat_id)
+         
+    
+def register_last_step(chat_id):
     remove_markup = telebot.types.ReplyKeyboardRemove()
     calendar, step = DetailedTelegramCalendar().build()
     bot.send_message(chat_id, "Выберите дату начала абонемента:", reply_markup=remove_markup)
     bot.send_message(chat_id, "📅 Выберите дату:", reply_markup=calendar)
-    
-   
+
 @bot.callback_query_handler(func=DetailedTelegramCalendar.func())
 def handle_calendar(call):
     chat_id = call.message.chat.id
