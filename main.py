@@ -1,7 +1,6 @@
 import os
 import telebot
-import psycopg2
-from psycopg2.extras import RealDictCursor
+import sqlite3
 import threading
 import time
 from dotenv import load_dotenv
@@ -20,8 +19,9 @@ bot = telebot.TeleBot(BOT_TOKEN)
 # --------------------------------------------------------------------------
 
 def db_connect():
-    conn = psycopg2.connect(os.getenv("DATABASE_URL"))
-    cur = conn.cursor(cursor_factory=RealDictCursor)
+    conn = sqlite3.connect("clients.sql")
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
     return conn, cur
 
 def db_close_connect(conn, save=False):
@@ -33,7 +33,7 @@ def init_db():
     conn, cur = db_connect()
     cur.execute('''
         CREATE TABLE IF NOT EXISTS clients (
-            id SERIAL PRIMARY KEY,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT,
             phone TEXT,
             parent_name TEXT,
@@ -43,7 +43,7 @@ def init_db():
             is_expiried BOOLEAN DEFAULT FALSE,
             how_much_was_price TEXT,
             training_type TEXT,
-            telegram_id BIGINT,
+            telegram_id INTEGER,
             telegram_username TEXT,
             comment TEXT,
             role TEXT DEFAULT 'user',
@@ -77,7 +77,7 @@ def check_subscriptions():
         to_update = []
         
         for row in rows:
-            finish_date_str = row["finish_date"]
+            user_id, name, telegram_id, telegram_username, finish_date_str, is_expiried = row
             
             if not finish_date_str:
                 continue
@@ -88,32 +88,37 @@ def check_subscriptions():
                 
                 if days_left == 1:
                     for admin_id in ADMIN_IDS:
-                        safe_send(admin_id, f"⚠️ Абонемент {row['name']} @{row['telegram_username']} истекает завтра ({finish_date_str})")
-                    if row["telegram_id"]:
-                        safe_send(row["telegram_id"], f"⚠️ {row['name']}, ваш абонемент истекает завтра!")
+                        safe_send(admin_id, f"⚠️ Абонемент {name} @{telegram_username} истекает завтра ({finish_date_str})")
+                    if telegram_id:
+                        safe_send(telegram_id, f"⚠️ {name}, ваш абонемент истекает завтра!")
                         
                 elif days_left <= 0:
-                    to_update.append(row["id"])
+                    # Обновляем только если ещё не помечен как истёкший
+                    to_update.append(user_id)
                     
                     if days_left == 0:
-                        msg = f"❌ Абонемент {row['name']} @{row['telegram_username']} истекает сегодня!"
-                        msg2 = f"❌ Ваш абонемент {row['name']} истекает сегодня!"
+                        msg = f"❌ Абонемент {name} @{telegram_username} истекает сегодня!"
                     else:
-                        msg = f"❌ Абонемент {row['name']} @{row['telegram_username']} истёк {finish_date_str}!"
-                        msg2 = f"❌ Ваш абонемент {row['name']} истёк {finish_date_str}!"
+                        msg = f"❌ Абонемент {name} @{telegram_username} истёк {finish_date_str}!"
+                    
+                    if days_left == 0:
+                        msg2 = f"❌ Ваш абонемент {name} истекает сегодня!"
+                    else:
+                        msg2 = f"❌ Ваш абонемент {name} истёк {finish_date_str}!"
                     
                     for admin_id in ADMIN_IDS:
                         safe_send(admin_id, msg)
-                    if row["telegram_id"]:
-                        safe_send(row["telegram_id"], msg2)
+                    if telegram_id:
+                        safe_send(telegram_id, msg2)
                         
             except ValueError as e:
-                print(f"Ошибка парсинга даты у {row['name']}: {e}")
+                print(f"Ошибка парсинга даты у {name}: {e}")
                 continue
         
+        # Один UPDATE после цикла
         if to_update:
             conn, cur = db_connect()
-            cur.executemany("UPDATE clients SET is_expiried = TRUE WHERE id = %s", [(uid,) for uid in to_update])
+            cur.executemany("UPDATE clients SET is_expiried = TRUE WHERE id = ?", [(uid,) for uid in to_update])
             db_close_connect(conn, save=True)
         
         time.sleep(86400)
@@ -206,7 +211,7 @@ def start_search(message):
 def perform_search(message):
     query = message.text.strip()
     conn, cur = db_connect()
-    cur.execute("SELECT * FROM clients WHERE name LIKE %s OR phone LIKE %s OR parent_name LIKE %s OR parent_phone LIKE %s", 
+    cur.execute("SELECT * FROM clients WHERE name LIKE ? OR phone LIKE ? OR parent_name LIKE ? OR parent_phone LIKE ?", 
                 (f"%{query}%", f"%{query}%", f"%{query}%", f"%{query}%"))
     find_users = cur.fetchall()
     db_close_connect(conn)
@@ -274,7 +279,7 @@ def process_renew_all(message):
         try:
             finish_date = datetime.strptime(client["finish_date"], "%d.%m.%Y").date()
             new_finish_date = finish_date + relativedelta(days=days)
-            cur.execute("UPDATE clients SET finish_date = %s, is_expiried = FALSE WHERE id = %s", 
+            cur.execute("UPDATE clients SET finish_date = ?, is_expiried = FALSE WHERE id = ?", 
                        (new_finish_date.strftime("%d.%m.%Y"), client["id"]))
             updated += 1
         except ValueError:
@@ -293,7 +298,7 @@ def process_renew_all(message):
 def handle_delete(call):
     user_id = call.data.split("_")[1]
     conn, curr = db_connect()
-    curr.execute("DELETE FROM clients WHERE id = %s", (user_id,))
+    curr.execute("DELETE FROM clients WHERE id = ?", (user_id,))
     db_close_connect(conn, save=True)
     bot.delete_message(call.message.chat.id, call.message.message_id)
     bot.answer_callback_query(call.id, "Удалено!")
@@ -356,7 +361,7 @@ def handle_edit_parent(call):
     chat_id = call.message.chat.id
     # cancale_btn = cancel_action()
     conn, cur = db_connect()
-    cur.execute("SELECT * FROM clients WHERE id = %s", (user_id,))
+    cur.execute("SELECT * FROM clients WHERE id = ?", (user_id,))
     find_user = cur.fetchone()
     db_close_connect(conn, save=True)
     if not find_user:
@@ -381,7 +386,7 @@ def save_new_value(message, user_id, field):
         return
     new_value = message.text.strip()
     conn, cur = db_connect()
-    cur.execute(f"UPDATE clients SET {field} = %s WHERE id = %s", (new_value, user_id))
+    cur.execute(f"UPDATE clients SET {field} = ? WHERE id = ?", (new_value, user_id))
     db_close_connect(conn, save=True)
     markup = make_admin_markup()
     msg = bot.send_message(message.chat.id, "✅ Данные обновлены!", reply_markup=markup)
@@ -404,7 +409,7 @@ def show_all_users(message):
 
     text = "📋 *Список пользователей:*\n\n"
     for r in rows:
-        expired_status = "✔️" if r['is_expiried'] == 1 else "❌"
+        expired_status = "✔️" if r[7] == 1 else "❌"
           
         text += (
             f"🆔 Tg: @{r['telegram_username']} | id: {r['telegram_id']}\n"
@@ -505,7 +510,7 @@ def handle_calendar(call):
         if data.get("action") == "renew":
             # Продление — UPDATE
             cur.execute(
-                "UPDATE clients SET start_date = %s, finish_date = %s, is_expiried = %s WHERE id = %s",
+                "UPDATE clients SET start_date = ?, finish_date = ?, is_expiried = ? WHERE id = ?",
                 (start_date.strftime("%d.%m.%Y"), finish_date.strftime("%d.%m.%Y"), 0 ,data["client_id"])
             )
             bot.edit_message_text(
@@ -515,7 +520,7 @@ def handle_calendar(call):
         else:
             # Регистрация — INSERT
             cur.execute(
-                "INSERT INTO clients (name, birthday, phone, parent_name, parent_phone, start_date, finish_date, how_much_was_price, training_type) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                "INSERT INTO clients (name, birthday, phone, parent_name, parent_phone, start_date, finish_date, how_much_was_price, training_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (data["name"], data['birthday'], data["phone"], data["parent_name"], data["parent_phone"],
                  start_date.strftime("%d.%m.%Y"), finish_date.strftime("%d.%m.%Y"), data["how_much_was_price"], data["training_type"])
             )
@@ -576,7 +581,7 @@ def start(message):
 
 def auto_login_user(message):
     conn, cur = db_connect()
-    cur.execute("SELECT * FROM clients WHERE telegram_username = %s", (message.from_user.username,))  # execute, не excute! И кортеж!
+    cur.execute("SELECT * FROM clients WHERE telegram_username = ?", (message.from_user.username,))  # execute, не excute! И кортеж!
     user = cur.fetchone()
     db_close_connect(conn)
     return user
@@ -584,7 +589,7 @@ def auto_login_user(message):
 def login_user(message):
     phone = message.text.strip()
     conn, cur = db_connect()
-    cur.execute("SELECT * FROM clients WHERE phone = %s OR parent_phone = %s", (phone, phone))
+    cur.execute("SELECT * FROM clients WHERE phone = ? OR parent_phone = ?", (phone, phone))
     user = cur.fetchone()
     db_close_connect(conn)
 
@@ -597,7 +602,7 @@ def login_user(message):
         
         # Сохраняем telegram данные
         conn, cur = db_connect()
-        cur.execute("UPDATE clients SET telegram_id = %s, telegram_username = %s WHERE id = %s", 
+        cur.execute("UPDATE clients SET telegram_id = ?, telegram_username = ? WHERE id = ?", 
                     (message.chat.id, message.from_user.username, user["id"]))
         db_close_connect(conn, save=True)
     else:
@@ -611,7 +616,7 @@ def choose_user_function(message):
 def callback_handler(call):
     if call.data == "my_subscription":
         conn, cur = db_connect()
-        cur.execute("SELECT start_date, finish_date, is_expiried FROM clients WHERE telegram_id = %s", (call.message.chat.id,))
+        cur.execute("SELECT start_date, finish_date, is_expiried FROM clients WHERE telegram_id = ?", (call.message.chat.id,))
         user = cur.fetchone()
         db_close_connect(conn)
 
