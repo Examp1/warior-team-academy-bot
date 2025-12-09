@@ -531,6 +531,32 @@ def handle_calendar(call):
         msg = bot.send_message(chat_id, "Возвращаемся в админ панель:", reply_markup=markup)
         bot.register_next_step_handler(msg, choose_admin_function)
 
+@bot.message_handler(commands=['stats'])
+def show_stats(message):
+    if message.chat.id not in ADMIN_IDS:
+        bot.send_message(message.chat.id, "❌ У вас нет доступа к этой команде.")
+        return
+    
+    conn, cur = db_connect()
+    cur.execute("""
+        SELECT 
+            COUNT(*) AS total, 
+            SUM(CASE WHEN is_expiried = FALSE THEN 1 ELSE 0 END) AS active,
+            COALESCE(SUM(CAST(how_much_was_price AS INTEGER)), 0) AS total_money
+        FROM clients
+    """)
+    stats = cur.fetchone()
+    db_close_connect(conn)
+    
+    text = (
+        f"📊 *Статистика пользователей:*\n\n"
+        f"👥 Всего пользователей: {stats['total']}\n"
+        f"✅ Активных абонементов: {stats['active']}\n"
+        f"❌ Истёкших абонементов: {stats['total'] - stats['active']}\n"
+        f"💰 Общая сумма оплат: {stats['total_money']} рубликов\n"
+    )
+    bot.send_message(message.chat.id, text, parse_mode="Markdown")
+
 # --------------------------------------------------------------------------
 # USER PANEL
 # --------------------------------------------------------------------------
