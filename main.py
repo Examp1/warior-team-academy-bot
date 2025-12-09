@@ -1,4 +1,5 @@
 import os
+import re
 import telebot
 import sqlite3
 import threading
@@ -546,19 +547,27 @@ def show_stats(message):
     cur.execute("""
         SELECT 
             COUNT(*) AS total, 
-            SUM(CASE WHEN is_expiried = FALSE THEN 1 ELSE 0 END) AS active,
-            COALESCE(SUM(CAST(how_much_was_price AS INTEGER)), 0) AS total_money
+            SUM(CASE WHEN is_expiried = FALSE THEN 1 ELSE 0 END) AS active
         FROM clients
     """)
     stats = cur.fetchone()
+    
+    cur.execute("SELECT how_much_was_price FROM clients WHERE how_much_was_price IS NOT NULL")
+    rows = cur.fetchall()
     db_close_connect(conn)
+    
+    total_money = 0
+    for r in rows:
+        numbers = re.findall(r'\d+', r["how_much_was_price"] or "")
+        if numbers:
+            total_money += int(numbers[0])
     
     text = (
         f"📊 *Статистика пользователей:*\n\n"
         f"👥 Всего пользователей: {stats['total']}\n"
         f"✅ Активных абонементов: {stats['active']}\n"
         f"❌ Истёкших абонементов: {stats['total'] - stats['active']}\n"
-        f"💰 Общая сумма оплат: {stats['total_money']} рубликов\n"
+        f"💰 Общая сумма оплат: {total_money} рубликов\n"
     )
     bot.send_message(message.chat.id, text, parse_mode="Markdown")
 
